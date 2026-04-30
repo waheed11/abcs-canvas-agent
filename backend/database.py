@@ -111,3 +111,21 @@ class DatabaseManager:
             
         conn.close()
         return result
+
+    def get_all_sessions(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM sessions ORDER BY created_at DESC')
+        sessions = cursor.fetchall()
+        
+        results = []
+        for s in sessions:
+            session_dict = dict(s)
+            cursor.execute('SELECT * FROM tasks WHERE session_id = ? ORDER BY timestamp DESC', (session_dict['session_id'],))
+            tasks = cursor.fetchall()
+            session_dict['tasks'] = [dict(t) for t in tasks]
+            results.append(session_dict)
+            
+        conn.close()
+        return results

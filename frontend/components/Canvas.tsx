@@ -27,22 +27,27 @@ const getColorForType = (type: string) => {
   }
 };
 
-const createNodeStyle = (type: string) => ({
-  borderRadius: '8px', 
-  width: 150, 
-  padding: '10px',
-  display: 'flex', 
-  alignItems: 'center', 
-  justifyContent: 'center',
-  background: 'white',
-  border: `2px solid ${getColorForType(type)}`,
-  borderLeft: `8px solid ${getColorForType(type)}`,
-  fontWeight: 'bold',
-  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-  fontSize: '12px'
-});
+const createNodeStyle = (type: string) => {
+  const size = type === 'B' ? 100 : 60;
+  return {
+    borderRadius: '50%', 
+    width: size,
+    height: size,
+    display: 'flex', 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    background: getColorForType(type),
+    color: 'white',
+    fontWeight: 'bold',
+    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.2)',
+    fontSize: type === 'B' ? '14px' : '10px',
+    textAlign: 'center' as const,
+    padding: '8px',
+    border: '2px solid white'
+  };
+};
 
-export default function Canvas({ ws, activeTab }: { ws: WebSocket | null, activeTab: string }) {
+export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, activeSessionId: string }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
 
@@ -54,41 +59,68 @@ export default function Canvas({ ws, activeTab }: { ws: WebSocket | null, active
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'canvas_update' && data.action === 'add_nodes') {
-          // Add a central B node
+          // Central Source Node (B)
           const targetNodeId = `B-${Date.now()}`;
+          const centerX = 400;
+          const centerY = 150;
+          
           const newBNode: Node = {
             id: targetNodeId,
-            position: { x: 300, y: 150 },
-            data: { label: 'Extracted Source' },
+            position: { x: centerX, y: centerY },
+            data: { label: 'Source' },
             style: createNodeStyle('B')
           };
 
           const newNodes: Node[] = [newBNode];
           const newEdges: Edge[] = [];
 
-          // Add surrounding A nodes
-          let i = 0;
+          // Flatten atomics into an array
+          const atomicsList: {id: string, label: string}[] = [];
+          let categoryIndex = 0;
           for (const [category, count] of Object.entries(data.atomics || {})) {
-            // Cap at 5 nodes per category for visual sanity in UI
-            const visualCount = Math.min(count as number, 5); 
+            const visualCount = Math.min(count as number, 6); // Max 6 per category for UI
             for (let j = 0; j < visualCount; j++) {
-               const id = `A-${Date.now()}-${i}-${j}`;
-               newNodes.push({
-                 id,
-                 position: { x: 100 + (j * 160), y: 300 + (i * 100) },
-                 data: { label: `${category} ${j+1}` },
-                 style: createNodeStyle('A')
-               });
-               newEdges.push({
-                 id: `e-${targetNodeId}-${id}`,
-                 source: targetNodeId,
-                 target: id,
-                 animated: true,
-                 style: { stroke: '#9CA3AF', strokeWidth: 2 }
+               atomicsList.push({
+                 id: `A-${Date.now()}-${categoryIndex}-${j}`,
+                 label: `${category.substring(0,3)} ${j+1}`
                });
             }
-            i++;
+            categoryIndex++;
           }
+
+          // Radial layout algorithm (Arc below the source)
+          const totalAtomics = atomicsList.length;
+          const radius = Math.max(180, totalAtomics * 20); // Scale radius based on count
+          
+          atomicsList.forEach((atomic, index) => {
+             // Map index to an angle between Math.PI * 0.1 and Math.PI * 0.9
+             // If only 1 node, put it straight down (Math.PI / 2)
+             let angle = Math.PI / 2;
+             if (totalAtomics > 1) {
+                 const minAngle = Math.PI * 0.1;
+                 const maxAngle = Math.PI * 0.9;
+                 angle = minAngle + (index / (totalAtomics - 1)) * (maxAngle - minAngle);
+             }
+             
+             // X and Y in React Flow (Y grows downwards)
+             const x = centerX + radius * Math.cos(angle);
+             const y = centerY + radius * Math.sin(angle);
+             
+             newNodes.push({
+               id: atomic.id,
+               position: { x, y },
+               data: { label: atomic.label },
+               style: createNodeStyle('A')
+             });
+             
+             newEdges.push({
+               id: `e-${targetNodeId}-${atomic.id}`,
+               source: targetNodeId,
+               target: atomic.id,
+               animated: true,
+               style: { stroke: '#9CA3AF', strokeWidth: 2, strokeDasharray: 'none' } // Solid animated line
+             });
+          });
 
           setNodes((nds) => [...nds, ...newNodes]);
           setEdges((eds) => [...eds, ...newEdges]);

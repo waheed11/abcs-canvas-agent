@@ -34,6 +34,10 @@ def read_root():
 def get_vault_tree():
     return {"tree": vault_manager.get_tree()}
 
+@app.get("/api/sessions")
+def get_sessions():
+    return {"sessions": db.get_all_sessions()}
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
