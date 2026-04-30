@@ -1,6 +1,6 @@
 "use client";
 import dynamic from 'next/dynamic';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { connectWebSocket } from '@/lib/websocket';
 
 // React Flow dynamically imported
@@ -84,7 +84,6 @@ export default function Home() {
   const [isAgentInfoOpen, setIsAgentInfoOpen] = useState(false);
   // Draft nodes live at the vault root AND appear on the canvas
   const [draftNodes, setDraftNodes] = useState<{id: string, name: string}[]>([]);
-  const canvasRef = useRef<{addDraftCircle: (id: string) => void} | null>(null);
 
   const fetchSessions = () => {
     fetch("http://localhost:8000/api/sessions")
@@ -146,10 +145,6 @@ export default function Home() {
     const id = `draft-${Date.now()}`;
     const name = `New Node ${draftNodes.length + 1}`;
     setDraftNodes(prev => [...prev, { id, name }]);
-    // Tell canvas to draw the draft circle
-    if (canvasRef.current) {
-      canvasRef.current.addDraftCircle(id);
-    }
   };
 
   return (
@@ -228,7 +223,7 @@ export default function Home() {
 
         {/* Canvas Area */}
         <div className="flex-1 relative">
-          <Canvas ws={ws} activeSessionId={activeSessionId} ref={canvasRef} onDraftDragStart={handleDragStartDraft} />
+          <Canvas ws={ws} activeSessionId={activeSessionId} draftNodes={draftNodes} />
           
           {/* Fixed "New Node" button — top-right corner of the canvas */}
           <button

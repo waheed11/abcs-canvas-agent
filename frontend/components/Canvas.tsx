@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useCallback, useEffect, useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
@@ -11,9 +11,7 @@ import {
   Node,
   Edge,
   addEdge,
-  Connection,
-  useReactFlow,
-  ReactFlowProvider
+  Connection
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -53,36 +51,46 @@ const createNodeStyle = (type: string) => {
     overflow: 'hidden' as const,
     wordBreak: 'break-all' as const,
     lineHeight: '1.1',
-    cursor: isDraft ? 'grab' : 'default',
   };
 };
 
 interface CanvasProps {
   ws: WebSocket | null;
   activeSessionId: string;
-  onDraftDragStart?: (e: any, draftId: string) => void;
+  draftNodes: {id: string, name: string}[];
 }
 
-const CanvasInner = forwardRef(function CanvasInner(
-  { ws, activeSessionId, onDraftDragStart }: CanvasProps,
-  ref: React.Ref<{ addDraftCircle: (id: string) => void }>
-) {
+export default function Canvas({ ws, activeSessionId, draftNodes }: CanvasProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
 
-  // Expose addDraftCircle to parent
-  useImperativeHandle(ref, () => ({
-    addDraftCircle: (id: string) => {
-      const newNode: Node = {
-        id: id,
-        position: { x: 350, y: 300 }, // Center of canvas
-        data: { label: 'New' },
-        style: createNodeStyle('draft'),
-        draggable: true,
-      };
-      setNodes(prev => [...prev, newNode]);
+  // Sync draft nodes from parent into canvas nodes
+  useEffect(() => {
+    const existingDraftIds = new Set(nodes.filter(n => n.id.startsWith('draft-')).map(n => n.id));
+    const newDraftIds = new Set(draftNodes.map(d => d.id));
+
+    // Add new drafts that aren't on canvas yet
+    const toAdd: Node[] = [];
+    draftNodes.forEach((draft, index) => {
+      if (!existingDraftIds.has(draft.id)) {
+        toAdd.push({
+          id: draft.id,
+          position: { x: 350, y: 300 }, // Center of canvas
+          data: { label: 'New' },
+          style: createNodeStyle('draft'),
+          draggable: true,
+        });
+      }
+    });
+
+    // Remove drafts that were deleted from parent state
+    if (toAdd.length > 0 || existingDraftIds.size !== newDraftIds.size) {
+      setNodes(prev => [
+        ...prev.filter(n => !n.id.startsWith('draft-') || newDraftIds.has(n.id)),
+        ...toAdd
+      ]);
     }
-  }));
+  }, [draftNodes]);
 
   // Listen for WebSocket commands to draw nodes
   useEffect(() => {
@@ -162,7 +170,7 @@ const CanvasInner = forwardRef(function CanvasInner(
             ringIndex++;
           }
 
-          // Remove any draft nodes from canvas (they've been consumed)
+          // Remove draft nodes, add result nodes
           setNodes(nds => [...nds.filter(n => !n.id.startsWith('draft-')), ...newNodes]);
           setEdges(eds => [...eds, ...newEdges]);
         }
@@ -191,32 +199,21 @@ const CanvasInner = forwardRef(function CanvasInner(
   );
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      fitView
-      fitViewOptions={{ padding: 0.3 }}
-      minZoom={0.2}
-      maxZoom={2}
-    >
-      <Background gap={24} color="#e5e7eb" />
-      <Controls />
-    </ReactFlow>
-  );
-});
-
-// Wrapper to provide ReactFlowProvider
-const Canvas = forwardRef(function Canvas(props: CanvasProps, ref: React.Ref<{ addDraftCircle: (id: string) => void }>) {
-  return (
     <div style={{ width: '100%', height: '100%', backgroundColor: '#f9fafb' }}>
-      <ReactFlowProvider>
-        <CanvasInner {...props} ref={ref} />
-      </ReactFlowProvider>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        fitView
+        fitViewOptions={{ padding: 0.3 }}
+        minZoom={0.2}
+        maxZoom={2}
+      >
+        <Background gap={24} color="#e5e7eb" />
+        <Controls />
+      </ReactFlow>
     </div>
   );
-});
-
-export default Canvas;
+}
