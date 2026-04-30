@@ -39,11 +39,14 @@ const createNodeStyle = (type: string) => {
     background: getColorForType(type),
     color: 'white',
     fontWeight: 'bold',
-    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.2)',
+    boxShadow: `0 4px 14px -2px ${getColorForType(type)}66`,
     fontSize: type === 'B' ? '14px' : '10px',
     textAlign: 'center' as const,
-    padding: '8px',
-    border: '2px solid white'
+    padding: '4px',
+    border: `3px solid ${getColorForType(type)}33`,
+    overflow: 'hidden' as const,
+    wordBreak: 'break-all' as const,
+    lineHeight: '1.1',
   };
 };
 
@@ -59,14 +62,14 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'canvas_update' && data.action === 'add_nodes') {
-          // Central Source Node (B)
+          // Central Source Node (B) — placed at center of canvas
           const targetNodeId = `B-${Date.now()}`;
           const centerX = 400;
-          const centerY = 150;
+          const centerY = 350;
           
           const newBNode: Node = {
             id: targetNodeId,
-            position: { x: centerX, y: centerY },
+            position: { x: centerX - 50, y: centerY - 50 }, // offset by half size so center aligns
             data: { label: 'Source' },
             style: createNodeStyle('B')
           };
@@ -78,7 +81,7 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
           const atomicsList: {id: string, label: string}[] = [];
           let categoryIndex = 0;
           for (const [category, count] of Object.entries(data.atomics || {})) {
-            const visualCount = Math.min(count as number, 6); // Max 6 per category for UI
+            const visualCount = Math.min(count as number, 5); // Max 5 per category for UI
             for (let j = 0; j < visualCount; j++) {
                atomicsList.push({
                  id: `A-${Date.now()}-${categoryIndex}-${j}`,
@@ -88,39 +91,51 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
             categoryIndex++;
           }
 
-          // Radial layout algorithm (Arc below the source)
+          // ====== FULL 360° MULTI-RING LAYOUT ======
           const totalAtomics = atomicsList.length;
-          const radius = Math.max(180, totalAtomics * 20); // Scale radius based on count
-          
-          atomicsList.forEach((atomic, index) => {
-             // Map index to an angle between Math.PI * 0.1 and Math.PI * 0.9
-             // If only 1 node, put it straight down (Math.PI / 2)
-             let angle = Math.PI / 2;
-             if (totalAtomics > 1) {
-                 const minAngle = Math.PI * 0.1;
-                 const maxAngle = Math.PI * 0.9;
-                 angle = minAngle + (index / (totalAtomics - 1)) * (maxAngle - minAngle);
-             }
-             
-             // X and Y in React Flow (Y grows downwards)
-             const x = centerX + radius * Math.cos(angle);
-             const y = centerY + radius * Math.sin(angle);
-             
-             newNodes.push({
-               id: atomic.id,
-               position: { x, y },
-               data: { label: atomic.label },
-               style: createNodeStyle('A')
-             });
-             
-             newEdges.push({
-               id: `e-${targetNodeId}-${atomic.id}`,
-               source: targetNodeId,
-               target: atomic.id,
-               animated: true,
-               style: { stroke: '#9CA3AF', strokeWidth: 2, strokeDasharray: 'none' } // Solid animated line
-             });
-          });
+          const maxPerRing = 12; // max nodes in one ring before we start a new ring
+          const ringGap = 120;  // spacing between concentric rings
+          const baseRadius = 180;
+
+          let placed = 0;
+          let ringIndex = 0;
+
+          while (placed < totalAtomics) {
+            const ringCapacity = Math.min(maxPerRing + ringIndex * 4, totalAtomics - placed);
+            const nodesInThisRing = Math.min(ringCapacity, totalAtomics - placed);
+            const radius = baseRadius + ringIndex * ringGap;
+
+            // Start angle offset so rings don't line up perfectly
+            const ringOffset = ringIndex * 0.3;
+
+            for (let i = 0; i < nodesInThisRing; i++) {
+              const atomic = atomicsList[placed + i];
+              
+              // Full 360° distribution: angle from 0 to 2π
+              const angle = ringOffset + (i / nodesInThisRing) * Math.PI * 2;
+              
+              const x = centerX + radius * Math.cos(angle) - 30; // offset by half node size (60/2)
+              const y = centerY + radius * Math.sin(angle) - 30;
+              
+              newNodes.push({
+                id: atomic.id,
+                position: { x, y },
+                data: { label: atomic.label },
+                style: createNodeStyle('A')
+              });
+              
+              newEdges.push({
+                id: `e-${targetNodeId}-${atomic.id}`,
+                source: targetNodeId,
+                target: atomic.id,
+                animated: true,
+                style: { stroke: '#d1d5db', strokeWidth: 1.5 }
+              });
+            }
+
+            placed += nodesInThisRing;
+            ringIndex++;
+          }
 
           setNodes((nds) => [...nds, ...newNodes]);
           setEdges((eds) => [...eds, ...newEdges]);
@@ -158,8 +173,11 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         fitView
+        fitViewOptions={{ padding: 0.3 }}
+        minZoom={0.2}
+        maxZoom={2}
       >
-        <Background gap={16} />
+        <Background gap={24} color="#e5e7eb" />
         <Controls />
       </ReactFlow>
     </div>

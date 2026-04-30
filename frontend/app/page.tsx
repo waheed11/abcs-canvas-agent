@@ -6,6 +6,64 @@ import { connectWebSocket } from '@/lib/websocket';
 // React Flow dynamically imported
 const Canvas = dynamic(() => import('@/components/Canvas'), { ssr: false });
 
+// ABCs pillar colors for root folders
+const pillarColors: Record<string, string> = {
+  A: 'text-yellow-600',
+  B: 'text-blue-600',
+  C: 'text-red-600',
+  D: 'text-green-600',
+  E: 'text-gray-500',
+};
+
+// Recursive tree node component
+function TreeNode({ node, onDropToFolder, depth }: { node: any, onDropToFolder: (e: any, path: string) => void, depth: number }) {
+  const [isOpen, setIsOpen] = useState(depth < 1); // auto-expand root level
+  const isDir = node.type === 'directory';
+  const hasChildren = isDir && node.children && node.children.length > 0;
+  const rootColor = depth === 0 ? (pillarColors[node.name] || 'text-gray-800') : '';
+
+  if (!isDir) {
+    // File leaf node
+    return (
+      <div
+        className="flex items-center gap-1.5 py-1 pl-2 text-gray-500 text-xs hover:text-gray-700 rounded hover:bg-gray-50 transition-colors cursor-default"
+        style={{ marginLeft: depth * 16 }}
+      >
+        <span className="opacity-50">📄</span>
+        <span className="truncate">{node.name}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div
+        className={`flex items-center gap-1.5 py-1.5 cursor-pointer rounded transition-colors
+          ${depth === 0 ? 'font-semibold text-sm mb-1' : 'text-xs hover:bg-indigo-50'}
+          ${rootColor || 'text-gray-700'}
+        `}
+        style={{ paddingLeft: Math.max(depth * 16, 0) }}
+        onClick={() => setIsOpen(!isOpen)}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => onDropToFolder(e, node.path)}
+      >
+        <span className="text-[10px] text-gray-400 w-3 text-center shrink-0">
+          {hasChildren ? (isOpen ? '▼' : '▶') : ' '}
+        </span>
+        <span>{depth === 0 ? '📁' : (isOpen ? '📂' : '📁')}</span>
+        <span className="truncate">{node.name}</span>
+      </div>
+      {isOpen && hasChildren && (
+        <div className={depth === 0 ? 'border-l border-gray-200 ml-2' : 'ml-1'}>
+          {node.children.map((child: any) => (
+            <TreeNode key={child.path} node={child} onDropToFolder={onDropToFolder} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<any[]>([]);
   const [ws, setWs] = useState<WebSocket | null>(null);
@@ -112,42 +170,39 @@ export default function Home() {
         </div>
         <div className="flex-1 overflow-y-auto p-4 text-sm space-y-3">
           
-          {/* Draft Nodes */}
+          {/* Draft Nodes — visually distinct from vault folders */}
           {draftNodes > 0 && (
-             <div className="mb-4 pb-4 border-b border-dashed border-gray-300">
-                <div className="text-xs text-gray-400 mb-3 uppercase font-bold tracking-wider">Draft Nodes</div>
+             <div className="mb-4 pb-4 border-b-2 border-dashed border-orange-300 bg-orange-50 -mx-4 px-4 pt-3 rounded-b-lg">
+                <div className="text-xs text-orange-600 mb-3 uppercase font-bold tracking-wider flex items-center gap-1.5">
+                  <span className="inline-block w-2 h-2 bg-orange-500 rounded-full animate-pulse"></span>
+                  Pending Drafts ({draftNodes})
+                </div>
                 {Array.from({ length: draftNodes }).map((_, idx) => (
                   <div 
                     key={`draft-${idx}`}
                     draggable
                     onDragStart={(e) => handleDragStart(e, 'draft')}
-                    className="flex items-center justify-center w-12 h-12 bg-yellow-400 border-2 border-white rounded-full cursor-grab active:cursor-grabbing hover:scale-105 transition-transform shadow-md mx-auto mb-2 text-white font-bold text-xs"
-                    title="Drag me to a folder"
+                    className="flex items-center gap-3 px-3 py-2 mb-2 bg-white border-2 border-dashed border-orange-400 rounded-lg cursor-grab active:cursor-grabbing hover:border-orange-600 hover:shadow-md transition-all group"
+                    title="Drag this draft into a folder to start processing"
                   >
-                    Draft
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-yellow-400 to-orange-400 flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-sm group-hover:scale-110 transition-transform">
+                      ◆
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-gray-800">Draft Node {idx + 1}</div>
+                      <div className="text-[10px] text-orange-500 font-medium">Drag → folder to process</div>
+                    </div>
+                    <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-bold border border-orange-200 shrink-0">
+                      DRAFT
+                    </span>
                   </div>
                 ))}
-                <div className="text-center text-xs text-gray-500 mt-2">Drag to a folder</div>
              </div>
           )}
 
-          {/* Actual Tree */}
+          {/* Actual Tree — recursive */}
           {vaultTree.length === 0 ? <p className="text-gray-400">Loading tree...</p> : vaultTree.map((node: any) => (
-            <div key={node.path} className="mb-2">
-              <div className="font-medium text-gray-800 flex items-center">
-                <span className="mr-2">📁</span> {node.name}
-              </div>
-              {node.children && node.children.map((child: any) => (
-                <div 
-                  key={child.path} 
-                  className="ml-6 py-1.5 text-gray-600 hover:text-indigo-600 cursor-pointer border-l-2 border-transparent hover:border-indigo-500 pl-2 transition-colors rounded-r hover:bg-indigo-50"
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => handleDropToFolder(e, child.path)}
-                >
-                  📄 {child.name}
-                </div>
-              ))}
-            </div>
+            <TreeNode key={node.path} node={node} onDropToFolder={handleDropToFolder} depth={0} />
           ))}
         </div>
       </div>

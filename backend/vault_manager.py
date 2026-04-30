@@ -13,8 +13,9 @@ class VaultManager:
             for folder in ["A", "B", "C", "D", "E"]:
                 (self.vault_path / folder).mkdir(exist_ok=True)
                 
-    def get_tree(self):
-        """Returns a simplified tree of the A, B, C, D, E folders for the UI"""
+    def get_tree(self, max_depth: int = 3):
+        """Returns a recursive tree of the A, B, C, D, E folders for the UI.
+        Scans up to max_depth levels deep so the UI shows the full vault hierarchy."""
         tree = []
         root_folders = ["A", "B", "C", "D", "E"]
         
@@ -23,25 +24,44 @@ class VaultManager:
             if not root_path.exists():
                 continue
                 
-            node = {
-                "name": root,
-                "path": root,
-                "type": "directory",
-                "children": []
-            }
-            
-            # Simple 1-level deep scan for UI display
-            try:
-                for item in sorted(root_path.iterdir()):
-                    if item.is_dir() and not item.name.startswith('.'):
-                        node["children"].append({
-                            "name": item.name,
-                            "path": f"{root}/{item.name}",
-                            "type": "directory"
-                        })
-            except Exception as e:
-                print(f"Error reading {root_path}: {e}")
-                
+            node = self._scan_directory(root_path, root, current_depth=1, max_depth=max_depth)
             tree.append(node)
             
         return tree
+
+    def _scan_directory(self, dir_path: Path, relative_path: str, current_depth: int, max_depth: int) -> dict:
+        """Recursively scan a directory and return a tree node dict."""
+        node = {
+            "name": dir_path.name,
+            "path": relative_path,
+            "type": "directory",
+            "children": []
+        }
+        
+        if current_depth >= max_depth:
+            return node
+            
+        try:
+            for item in sorted(dir_path.iterdir()):
+                if item.name.startswith('.'):
+                    continue
+                    
+                if item.is_dir():
+                    child_path = f"{relative_path}/{item.name}"
+                    child_node = self._scan_directory(
+                        item, child_path, 
+                        current_depth=current_depth + 1, 
+                        max_depth=max_depth
+                    )
+                    node["children"].append(child_node)
+                elif item.is_file() and item.suffix == '.md':
+                    # Include markdown files as leaf nodes
+                    node["children"].append({
+                        "name": item.stem,  # filename without extension
+                        "path": f"{relative_path}/{item.name}",
+                        "type": "file"
+                    })
+        except Exception as e:
+            print(f"Error reading {dir_path}: {e}")
+            
+        return node
