@@ -250,7 +250,24 @@ export default function Home() {
 
         {/* Canvas Area */}
         <div className="flex-1 relative">
-          <Canvas ws={ws} activeSessionId={activeSessionId} draftNodes={draftNodes} />
+          <Canvas 
+            ws={ws} 
+            activeSessionId={activeSessionId} 
+            draftNodes={draftNodes} 
+            vaultTree={vaultTree}
+            onSelectFolder={(draftId, folderPath) => {
+              // Same logic as handleDropToFolder but triggered from canvas click
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: "node_drop",
+                  folder: folderPath,
+                  sessionId: activeSessionId,
+                  taskId: `task-${Date.now()}`
+                }));
+                setDraftNodes(prev => prev.filter(d => d.id !== draftId));
+              }
+            }}
+          />
           
           {/* Fixed "New Node" button — top-right corner of the canvas */}
           <button

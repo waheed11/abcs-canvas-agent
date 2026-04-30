@@ -58,24 +58,27 @@ interface CanvasProps {
   ws: WebSocket | null;
   activeSessionId: string;
   draftNodes: {id: string, name: string}[];
+  onSelectFolder?: (draftId: string, folderPath: string) => void;
+  vaultTree?: any[];
 }
 
-export default function Canvas({ ws, activeSessionId, draftNodes }: CanvasProps) {
+export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder, vaultTree }: CanvasProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
 
   // Sync draft nodes from parent into canvas nodes
   useEffect(() => {
     const existingDraftIds = new Set(nodes.filter(n => n.id.startsWith('draft-')).map(n => n.id));
     const newDraftIds = new Set(draftNodes.map(d => d.id));
 
-    // Add new drafts that aren't on canvas yet
     const toAdd: Node[] = [];
-    draftNodes.forEach((draft, index) => {
+    draftNodes.forEach((draft) => {
       if (!existingDraftIds.has(draft.id)) {
         toAdd.push({
           id: draft.id,
-          position: { x: 350, y: 300 }, // Center of canvas
+          position: { x: 350, y: 300 },
           data: { label: 'New' },
           style: createNodeStyle('draft'),
           draggable: true,
@@ -83,7 +86,6 @@ export default function Canvas({ ws, activeSessionId, draftNodes }: CanvasProps)
       }
     });
 
-    // Remove drafts that were deleted from parent state
     if (toAdd.length > 0 || existingDraftIds.size !== newDraftIds.size) {
       setNodes(prev => [
         ...prev.filter(n => !n.id.startsWith('draft-') || newDraftIds.has(n.id)),
@@ -94,13 +96,21 @@ export default function Canvas({ ws, activeSessionId, draftNodes }: CanvasProps)
 
   // Listen for WebSocket commands to draw nodes
   useEffect(() => {
-    if (!ws) return;
+    if (!ws) {
+      console.log('[Canvas] ws is null, skipping listener setup');
+      return;
+    }
+
+    console.log('[Canvas] Setting up WebSocket message listener');
 
     const handleMessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data);
+        console.log('[Canvas] Received WS message:', data.type, data.action || '');
+        
         if (data.type === 'canvas_update' && data.action === 'add_nodes') {
-          // Central Source Node (B)
+          console.log('[Canvas] Drawing nodes! Atomics:', data.atomics);
+          
           const targetNodeId = `B-${Date.now()}`;
           const centerX = 400;
           const centerY = 350;
@@ -115,7 +125,6 @@ export default function Canvas({ ws, activeSessionId, draftNodes }: CanvasProps)
           const newNodes: Node[] = [newBNode];
           const newEdges: Edge[] = [];
 
-          // Flatten atomics into an array
           const atomicsList: {id: string, label: string}[] = [];
           let categoryIndex = 0;
           for (const [category, count] of Object.entries(data.atomics || {})) {
@@ -170,18 +179,37 @@ export default function Canvas({ ws, activeSessionId, draftNodes }: CanvasProps)
             ringIndex++;
           }
 
+          console.log(`[Canvas] Adding ${newNodes.length} nodes, ${newEdges.length} edges`);
+          
           // Remove draft nodes, add result nodes
           setNodes(nds => [...nds.filter(n => !n.id.startsWith('draft-')), ...newNodes]);
           setEdges(eds => [...eds, ...newEdges]);
         }
       } catch (e) {
-        console.error("Canvas msg parse error", e);
+        console.error("[Canvas] msg parse error", e);
       }
     };
 
     ws.addEventListener('message', handleMessage);
     return () => ws.removeEventListener('message', handleMessage);
   }, [ws]);
+
+  // Handle clicking a draft node on canvas → open folder picker
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    if (node.id.startsWith('draft-')) {
+      setSelectedDraftId(node.id);
+      setShowFolderPicker(true);
+    }
+  }, []);
+
+  // Handle selecting a folder from the picker
+  const handleFolderSelect = (folderPath: string) => {
+    if (selectedDraftId && onSelectFolder) {
+      onSelectFolder(selectedDraftId, folderPath);
+    }
+    setShowFolderPicker(false);
+    setSelectedDraftId(null);
+  };
 
   const onNodesChange = useCallback(
     (changes: NodeChange<Node>[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
@@ -198,14 +226,32 @@ export default function Canvas({ ws, activeSessionId, draftNodes }: CanvasProps)
     []
   );
 
+  // Flatten vault tree into folder paths for the picker
+  const flattenFolders = (treeNodes: any[], prefix = ''): {name: string, path: string, depth: number}[] => {
+    const results: {name: string, path: string, depth: number}[] = [];
+    for (const node of treeNodes) {
+      if (node.type === 'directory') {
+        const depth = node.path.split('/').length - 1;
+        results.push({ name: node.name, path: node.path, depth });
+        if (node.children) {
+          results.push(...flattenFolders(node.children));
+        }
+      }
+    }
+    return results;
+  };
+
+  const folderList = vaultTree ? flattenFolders(vaultTree) : [];
+
   return (
-    <div style={{ width: '100%', height: '100%', backgroundColor: '#f9fafb' }}>
+    <div style={{ width: '100%', height: '100%', backgroundColor: '#f9fafb', position: 'relative' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onNodeClick={onNodeClick}
         fitView
         fitViewOptions={{ padding: 0.3 }}
         minZoom={0.2}
@@ -214,6 +260,41 @@ export default function Canvas({ ws, activeSessionId, draftNodes }: CanvasProps)
         <Background gap={24} color="#e5e7eb" />
         <Controls />
       </ReactFlow>
+
+      {/* Folder Picker Modal — appears when clicking a draft circle on canvas */}
+      {showFolderPicker && (
+        <div 
+          className="absolute inset-0 bg-black/30 flex items-center justify-center z-50"
+          onClick={() => setShowFolderPicker(false)}
+        >
+          <div 
+            className="bg-white rounded-xl shadow-2xl p-6 w-80 max-h-96 overflow-y-auto border border-gray-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-bold text-gray-800 mb-1 text-lg">Select Target Folder</h3>
+            <p className="text-xs text-gray-500 mb-4">Choose where to process this node</p>
+            <div className="space-y-1">
+              {folderList.map((folder) => (
+                <button
+                  key={folder.path}
+                  onClick={() => handleFolderSelect(folder.path)}
+                  className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-indigo-50 hover:text-indigo-700 transition-colors flex items-center gap-2"
+                  style={{ paddingLeft: `${12 + folder.depth * 16}px` }}
+                >
+                  <span>📁</span>
+                  <span>{folder.name}</span>
+                </button>
+              ))}
+            </div>
+            <button 
+              onClick={() => setShowFolderPicker(false)}
+              className="mt-4 w-full py-2 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
