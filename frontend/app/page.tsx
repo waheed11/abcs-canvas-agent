@@ -16,19 +16,17 @@ const pillarColors: Record<string, string> = {
 };
 
 // Recursive tree node component
-function TreeNode({ node, onDropToFolder, depth, draftItems, onDragStartDraft }: { 
+function TreeNode({ node, onDropToFolder, depth }: { 
   node: any, 
   onDropToFolder: (e: any, path: string) => void, 
   depth: number,
-  draftItems?: any[],
-  onDragStartDraft?: (e: any, draftId: string) => void
 }) {
   const [isOpen, setIsOpen] = useState(depth < 1); // auto-expand root level
+  const [isDragOver, setIsDragOver] = useState(false);
   const isDir = node.type === 'directory';
   const hasChildren = isDir && node.children && node.children.length > 0;
   const isRoot = depth === 0;
   const rootColor = isRoot ? (pillarColors[node.name] || 'text-gray-800') : '';
-  const hasDrafts = draftItems && draftItems.length > 0;
 
   if (!isDir) {
     // File leaf node
@@ -43,26 +41,50 @@ function TreeNode({ node, onDropToFolder, depth, draftItems, onDragStartDraft }:
     );
   }
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    onDropToFolder(e, node.path);
+  };
+
   return (
     <div>
       <div
-        className={`flex items-center gap-1.5 py-1.5 cursor-pointer rounded transition-colors
-          ${isRoot ? 'font-semibold text-sm mb-1' : 'text-xs hover:bg-indigo-50'}
+        className={`flex items-center gap-1.5 py-1.5 cursor-pointer rounded transition-all
+          ${isRoot ? 'font-semibold text-sm mb-1' : 'text-xs'}
           ${rootColor || 'text-gray-700'}
+          ${isDragOver ? 'bg-indigo-100 ring-2 ring-indigo-400 ring-inset' : 'hover:bg-gray-50'}
         `}
         style={{ paddingLeft: Math.max(depth * 16, 0) }}
         onClick={() => setIsOpen(!isOpen)}
-        onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('bg-indigo-100'); }}
-        onDragLeave={(e) => { e.currentTarget.classList.remove('bg-indigo-100'); }}
-        onDrop={(e) => { e.currentTarget.classList.remove('bg-indigo-100'); onDropToFolder(e, node.path); }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         <span className="text-[10px] text-gray-400 w-3 text-center shrink-0">
-          {hasChildren || hasDrafts ? (isOpen ? '▼' : '▶') : ' '}
+          {hasChildren ? (isOpen ? '▼' : '▶') : ' '}
         </span>
         <span>{isRoot ? '📁' : (isOpen ? '📂' : '📁')}</span>
         <span className="truncate">{node.name}</span>
+        {isDragOver && (
+          <span className="ml-auto text-[9px] bg-indigo-500 text-white px-1.5 py-0.5 rounded font-bold animate-pulse">
+            DROP HERE
+          </span>
+        )}
       </div>
-      {isOpen && (hasChildren || hasDrafts) && (
+      {isOpen && hasChildren && (
         <div className={isRoot ? 'border-l border-gray-200 ml-2' : 'ml-1'}>
           {node.children.map((child: any) => (
             <TreeNode key={child.path} node={child} onDropToFolder={onDropToFolder} depth={depth + 1} />
@@ -124,7 +146,10 @@ export default function Home() {
   // Drop handler on a folder — triggers LLM interaction
   const handleDropToFolder = (e: any, folderPath: string) => {
     e.preventDefault();
-    const draftId = e.dataTransfer.getData("application/draftId");
+    e.stopPropagation();
+    const draftId = e.dataTransfer?.getData("application/draftId") || "";
+    
+    console.log(`[DROP] folder=${folderPath}, draftId=${draftId}`);
     
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
@@ -137,6 +162,8 @@ export default function Home() {
       if (draftId) {
         setDraftNodes(prev => prev.filter(d => d.id !== draftId));
       }
+    } else {
+      console.warn("[DROP] WebSocket not connected!");
     }
   };
 
