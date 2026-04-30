@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -11,19 +11,21 @@ import {
   Node,
   Edge,
   addEdge,
-  Connection
+  Connection,
+  useReactFlow,
+  ReactFlowProvider
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
 // Node Color Rules
 const getColorForType = (type: string) => {
   switch(type) {
-    case 'A': return '#FBBF24'; // Yellow
-    case 'B': return '#60A5FA'; // Blue
-    case 'C': return '#F87171'; // Red
-    case 'D': return '#34D399'; // Green
-    case 'E': return '#9CA3AF'; // Gray
-    case 'draft': return '#FB923C'; // Orange for drafts
+    case 'A': return '#FBBF24';
+    case 'B': return '#60A5FA';
+    case 'C': return '#F87171';
+    case 'D': return '#34D399';
+    case 'E': return '#9CA3AF';
+    case 'draft': return '#FB923C';
     default: return '#E5E7EB';
   }
 };
@@ -62,11 +64,22 @@ interface CanvasProps {
   vaultTree?: any[];
 }
 
-export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder, vaultTree }: CanvasProps) {
+// Inner component that has access to useReactFlow
+function CanvasInner({ ws, activeSessionId, draftNodes, onSelectFolder, vaultTree }: CanvasProps) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const { fitView } = useReactFlow();
+  const fitViewTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Auto-fit view after nodes change (with a small delay so React Flow finishes layout)
+  const scheduleFitView = useCallback(() => {
+    if (fitViewTimerRef.current) clearTimeout(fitViewTimerRef.current);
+    fitViewTimerRef.current = setTimeout(() => {
+      fitView({ padding: 0.2, duration: 400 });
+    }, 100);
+  }, [fitView]);
 
   // Sync draft nodes from parent into canvas nodes
   useEffect(() => {
@@ -91,33 +104,26 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
         ...prev.filter(n => !n.id.startsWith('draft-') || newDraftIds.has(n.id)),
         ...toAdd
       ]);
+      if (toAdd.length > 0) scheduleFitView();
     }
   }, [draftNodes]);
 
   // Listen for WebSocket commands to draw nodes
   useEffect(() => {
-    if (!ws) {
-      console.log('[Canvas] ws is null, skipping listener setup');
-      return;
-    }
-
-    console.log('[Canvas] Setting up WebSocket message listener');
+    if (!ws) return;
 
     const handleMessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data);
-        console.log('[Canvas] Received WS message:', data.type, data.action || '');
         
         if (data.type === 'canvas_update' && data.action === 'add_nodes') {
-          console.log('[Canvas] Drawing nodes! Atomics:', data.atomics);
-          
           const targetNodeId = `B-${Date.now()}`;
-          const centerX = 400;
-          const centerY = 350;
+          const centerX = 0;  // Use origin — fitView will center everything automatically
+          const centerY = 0;
           
           const newBNode: Node = {
             id: targetNodeId,
-            position: { x: centerX - 50, y: centerY - 50 },
+            position: { x: centerX, y: centerY },
             data: { label: 'Source' },
             style: createNodeStyle('B')
           };
@@ -143,7 +149,6 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
           const maxPerRing = 12;
           const ringGap = 120;
           const baseRadius = 180;
-
           let placed = 0;
           let ringIndex = 0;
 
@@ -155,9 +160,8 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
             for (let i = 0; i < nodesInThisRing; i++) {
               const atomic = atomicsList[placed + i];
               const angle = ringOffset + (i / nodesInThisRing) * Math.PI * 2;
-              
-              const x = centerX + radius * Math.cos(angle) - 30;
-              const y = centerY + radius * Math.sin(angle) - 30;
+              const x = centerX + radius * Math.cos(angle);
+              const y = centerY + radius * Math.sin(angle);
               
               newNodes.push({
                 id: atomic.id,
@@ -174,16 +178,15 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
                 style: { stroke: '#d1d5db', strokeWidth: 1.5 }
               });
             }
-
             placed += nodesInThisRing;
             ringIndex++;
           }
 
-          console.log(`[Canvas] Adding ${newNodes.length} nodes, ${newEdges.length} edges`);
-          
-          // Remove draft nodes, add result nodes
           setNodes(nds => [...nds.filter(n => !n.id.startsWith('draft-')), ...newNodes]);
           setEdges(eds => [...eds, ...newEdges]);
+          
+          // Auto-fit after drawing
+          scheduleFitView();
         }
       } catch (e) {
         console.error("[Canvas] msg parse error", e);
@@ -192,9 +195,9 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
 
     ws.addEventListener('message', handleMessage);
     return () => ws.removeEventListener('message', handleMessage);
-  }, [ws]);
+  }, [ws, scheduleFitView]);
 
-  // Handle clicking a draft node on canvas → open folder picker
+  // Clicking a draft node on canvas → open folder picker
   const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     if (node.id.startsWith('draft-')) {
       setSelectedDraftId(node.id);
@@ -202,7 +205,6 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
     }
   }, []);
 
-  // Handle selecting a folder from the picker
   const handleFolderSelect = (folderPath: string) => {
     if (selectedDraftId && onSelectFolder) {
       onSelectFolder(selectedDraftId, folderPath);
@@ -215,19 +217,17 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
     (changes: NodeChange<Node>[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
     []
   );
-  
   const onEdgesChange = useCallback(
     (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
     []
   );
-
   const onConnect = useCallback(
     (params: Connection | Edge) => setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
     []
   );
 
   // Flatten vault tree into folder paths for the picker
-  const flattenFolders = (treeNodes: any[], prefix = ''): {name: string, path: string, depth: number}[] => {
+  const flattenFolders = (treeNodes: any[]): {name: string, path: string, depth: number}[] => {
     const results: {name: string, path: string, depth: number}[] = [];
     for (const node of treeNodes) {
       if (node.type === 'directory') {
@@ -240,11 +240,10 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
     }
     return results;
   };
-
   const folderList = vaultTree ? flattenFolders(vaultTree) : [];
 
   return (
-    <div style={{ width: '100%', height: '100%', backgroundColor: '#f9fafb', position: 'relative' }}>
+    <>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -254,7 +253,7 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
         onNodeClick={onNodeClick}
         fitView
         fitViewOptions={{ padding: 0.3 }}
-        minZoom={0.2}
+        minZoom={0.1}
         maxZoom={2}
       >
         <Background gap={24} color="#e5e7eb" />
@@ -295,6 +294,17 @@ export default function Canvas({ ws, activeSessionId, draftNodes, onSelectFolder
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+// Wrapper that provides ReactFlowProvider (required for useReactFlow hook)
+export default function Canvas(props: CanvasProps) {
+  return (
+    <div style={{ width: '100%', height: '100%', backgroundColor: '#f9fafb', position: 'relative' }}>
+      <ReactFlowProvider>
+        <CanvasInner {...props} />
+      </ReactFlowProvider>
     </div>
   );
 }
