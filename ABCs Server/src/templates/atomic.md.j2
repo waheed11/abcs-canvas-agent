@@ -1,0 +1,20 @@
+---
+type: {{ type }}
+source: {{ source_url }}
+timestamp: {{ timestamp }}
+---
+
+# {{ title }}
+
+## Core Concept
+{{ description }}
+
+## Breakdown
+{% if content %}
+{{ content }}
+{% else %}
+*Awaiting detailed extraction*
+{% endif %}
+
+## Links
+- [[{{ source_id }}_source]]
