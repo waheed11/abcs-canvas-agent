@@ -1,6 +1,6 @@
 "use client";
 import dynamic from 'next/dynamic';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { connectWebSocket } from '@/lib/websocket';
 
 // React Flow dynamically imported
@@ -16,11 +16,19 @@ const pillarColors: Record<string, string> = {
 };
 
 // Recursive tree node component
-function TreeNode({ node, onDropToFolder, depth }: { node: any, onDropToFolder: (e: any, path: string) => void, depth: number }) {
+function TreeNode({ node, onDropToFolder, depth, draftItems, onDragStartDraft }: { 
+  node: any, 
+  onDropToFolder: (e: any, path: string) => void, 
+  depth: number,
+  draftItems?: any[],
+  onDragStartDraft?: (e: any, draftId: string) => void
+}) {
   const [isOpen, setIsOpen] = useState(depth < 1); // auto-expand root level
   const isDir = node.type === 'directory';
   const hasChildren = isDir && node.children && node.children.length > 0;
-  const rootColor = depth === 0 ? (pillarColors[node.name] || 'text-gray-800') : '';
+  const isRoot = depth === 0;
+  const rootColor = isRoot ? (pillarColors[node.name] || 'text-gray-800') : '';
+  const hasDrafts = draftItems && draftItems.length > 0;
 
   if (!isDir) {
     // File leaf node
@@ -39,22 +47,23 @@ function TreeNode({ node, onDropToFolder, depth }: { node: any, onDropToFolder: 
     <div>
       <div
         className={`flex items-center gap-1.5 py-1.5 cursor-pointer rounded transition-colors
-          ${depth === 0 ? 'font-semibold text-sm mb-1' : 'text-xs hover:bg-indigo-50'}
+          ${isRoot ? 'font-semibold text-sm mb-1' : 'text-xs hover:bg-indigo-50'}
           ${rootColor || 'text-gray-700'}
         `}
         style={{ paddingLeft: Math.max(depth * 16, 0) }}
         onClick={() => setIsOpen(!isOpen)}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => onDropToFolder(e, node.path)}
+        onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('bg-indigo-100'); }}
+        onDragLeave={(e) => { e.currentTarget.classList.remove('bg-indigo-100'); }}
+        onDrop={(e) => { e.currentTarget.classList.remove('bg-indigo-100'); onDropToFolder(e, node.path); }}
       >
         <span className="text-[10px] text-gray-400 w-3 text-center shrink-0">
-          {hasChildren ? (isOpen ? '▼' : '▶') : ' '}
+          {hasChildren || hasDrafts ? (isOpen ? '▼' : '▶') : ' '}
         </span>
-        <span>{depth === 0 ? '📁' : (isOpen ? '📂' : '📁')}</span>
+        <span>{isRoot ? '📁' : (isOpen ? '📂' : '📁')}</span>
         <span className="truncate">{node.name}</span>
       </div>
-      {isOpen && hasChildren && (
-        <div className={depth === 0 ? 'border-l border-gray-200 ml-2' : 'ml-1'}>
+      {isOpen && (hasChildren || hasDrafts) && (
+        <div className={isRoot ? 'border-l border-gray-200 ml-2' : 'ml-1'}>
           {node.children.map((child: any) => (
             <TreeNode key={child.path} node={child} onDropToFolder={onDropToFolder} depth={depth + 1} />
           ))}
@@ -73,7 +82,9 @@ export default function Home() {
   const [activeAgent, setActiveAgent] = useState("Hermes");
   const [agentMetadata, setAgentMetadata] = useState<string>("");
   const [isAgentInfoOpen, setIsAgentInfoOpen] = useState(false);
-  const [draftNodes, setDraftNodes] = useState<number>(0);
+  // Draft nodes live at the vault root AND appear on the canvas
+  const [draftNodes, setDraftNodes] = useState<{id: string, name: string}[]>([]);
+  const canvasRef = useRef<{addDraftCircle: (id: string) => void} | null>(null);
 
   const fetchSessions = () => {
     fetch("http://localhost:8000/api/sessions")
@@ -98,7 +109,6 @@ export default function Home() {
         setMessages(prev => [...prev, data]);
       } else if (data.type === 'chat') {
         setMessages(prev => [...prev, data]);
-        // Refresh sessions when tasks complete
         fetchSessions();
       }
     });
@@ -106,13 +116,17 @@ export default function Home() {
     return () => socket.close();
   }, []);
 
-  const handleDragStart = (e: any, type: string) => {
-    e.dataTransfer.setData("application/reactflow", type);
+  // Drag start handler for draft nodes (both tree and canvas drag to folder)
+  const handleDragStartDraft = (e: any, draftId: string) => {
+    e.dataTransfer.setData("application/draftId", draftId);
     e.dataTransfer.effectAllowed = "move";
   };
 
+  // Drop handler on a folder — triggers LLM interaction
   const handleDropToFolder = (e: any, folderPath: string) => {
     e.preventDefault();
+    const draftId = e.dataTransfer.getData("application/draftId");
+    
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: "node_drop",
@@ -120,13 +134,22 @@ export default function Home() {
         sessionId: activeSessionId,
         taskId: `task-${Date.now()}`
       }));
-      // Remove a draft node if we successfully dropped one
-      if (draftNodes > 0) setDraftNodes(d => d - 1);
+      // Remove the draft node that was dropped
+      if (draftId) {
+        setDraftNodes(prev => prev.filter(d => d.id !== draftId));
+      }
     }
   };
 
-  const createDraftNode = () => {
-    setDraftNodes(prev => prev + 1);
+  // Create a new draft node — appears both in tree root AND as circle on canvas
+  const createNewNode = () => {
+    const id = `draft-${Date.now()}`;
+    const name = `New Node ${draftNodes.length + 1}`;
+    setDraftNodes(prev => [...prev, { id, name }]);
+    // Tell canvas to draw the draft circle
+    if (canvasRef.current) {
+      canvasRef.current.addDraftCircle(id);
+    }
   };
 
   return (
@@ -158,49 +181,31 @@ export default function Home() {
 
       {/* Left Panel - Vault Tree */}
       <div className="w-64 bg-white border-r border-gray-200 flex flex-col shrink-0 z-10 shadow-sm">
-        <div className="p-4 border-b border-gray-200 font-semibold bg-gray-50 flex justify-between items-center">
-          <span>Vault (Root)</span>
-          <button 
-            onClick={createDraftNode} 
-            className="w-8 h-8 flex items-center justify-center rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-200 hover:text-indigo-800 font-bold transition-colors" 
-            title="Create Draft Node"
-          >
-            +
-          </button>
+        <div className="p-4 border-b border-gray-200 font-semibold bg-gray-50">
+          Vault (Root)
         </div>
-        <div className="flex-1 overflow-y-auto p-4 text-sm space-y-3">
+        <div className="flex-1 overflow-y-auto p-4 text-sm space-y-1">
           
-          {/* Draft Nodes — visually distinct from vault folders */}
-          {draftNodes > 0 && (
-             <div className="mb-4 pb-4 border-b-2 border-dashed border-orange-300 bg-orange-50 -mx-4 px-4 pt-3 rounded-b-lg">
-                <div className="text-xs text-orange-600 mb-3 uppercase font-bold tracking-wider flex items-center gap-1.5">
-                  <span className="inline-block w-2 h-2 bg-orange-500 rounded-full animate-pulse"></span>
-                  Pending Drafts ({draftNodes})
+          {/* Draft nodes at vault root — visually distinct */}
+          {draftNodes.length > 0 && (
+            <div className="mb-3 pb-3 border-b border-dashed border-orange-300">
+              {draftNodes.map((draft) => (
+                <div 
+                  key={draft.id}
+                  draggable
+                  onDragStart={(e) => handleDragStartDraft(e, draft.id)}
+                  className="flex items-center gap-2 py-1.5 px-2 mb-1 border-2 border-dashed border-orange-300 rounded-md cursor-grab active:cursor-grabbing hover:border-orange-500 hover:bg-orange-50 transition-all group"
+                  title="Drag this to a folder to start processing"
+                >
+                  <span className="w-5 h-5 rounded-full bg-gradient-to-br from-yellow-400 to-orange-400 flex items-center justify-center text-white text-[8px] font-bold shrink-0 group-hover:scale-110 transition-transform">◆</span>
+                  <span className="text-xs text-gray-700 truncate flex-1">{draft.name}</span>
+                  <span className="text-[8px] bg-orange-100 text-orange-600 px-1 py-0.5 rounded font-bold shrink-0">DRAFT</span>
                 </div>
-                {Array.from({ length: draftNodes }).map((_, idx) => (
-                  <div 
-                    key={`draft-${idx}`}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, 'draft')}
-                    className="flex items-center gap-3 px-3 py-2 mb-2 bg-white border-2 border-dashed border-orange-400 rounded-lg cursor-grab active:cursor-grabbing hover:border-orange-600 hover:shadow-md transition-all group"
-                    title="Drag this draft into a folder to start processing"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-yellow-400 to-orange-400 flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-sm group-hover:scale-110 transition-transform">
-                      ◆
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-semibold text-gray-800">Draft Node {idx + 1}</div>
-                      <div className="text-[10px] text-orange-500 font-medium">Drag → folder to process</div>
-                    </div>
-                    <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-bold border border-orange-200 shrink-0">
-                      DRAFT
-                    </span>
-                  </div>
-                ))}
-             </div>
+              ))}
+            </div>
           )}
 
-          {/* Actual Tree — recursive */}
+          {/* Actual Tree — recursive, folders first then files */}
           {vaultTree.length === 0 ? <p className="text-gray-400">Loading tree...</p> : vaultTree.map((node: any) => (
             <TreeNode key={node.path} node={node} onDropToFolder={handleDropToFolder} depth={0} />
           ))}
@@ -210,7 +215,7 @@ export default function Home() {
       {/* Center Canvas & Bottom Chat */}
       <div className="flex-1 flex flex-col min-w-0 bg-gray-50">
         
-        {/* Header - No Tabs */}
+        {/* Header */}
         <div className="h-16 bg-white border-b border-gray-200 flex items-center px-6 shadow-sm z-10">
           <h1 className="text-xl font-bold text-gray-800 flex items-center gap-3">
             <span className="text-indigo-600">ABCs Canvas</span>
@@ -223,7 +228,19 @@ export default function Home() {
 
         {/* Canvas Area */}
         <div className="flex-1 relative">
-          <Canvas ws={ws} activeSessionId={activeSessionId} />
+          <Canvas ws={ws} activeSessionId={activeSessionId} ref={canvasRef} onDraftDragStart={handleDragStartDraft} />
+          
+          {/* Fixed "New Node" button — top-right corner of the canvas */}
+          <button
+            onClick={createNewNode}
+            className="absolute top-4 right-4 z-20 flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-gray-300 rounded-xl shadow-lg hover:shadow-xl hover:border-indigo-500 hover:bg-indigo-50 transition-all group cursor-pointer"
+            title="Create a new node on the canvas"
+          >
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-lg font-bold group-hover:scale-110 transition-transform shadow-sm">
+              +
+            </div>
+            <span className="text-sm font-semibold text-gray-700 group-hover:text-indigo-700">New Node</span>
+          </button>
         </div>
 
         {/* Bottom Panel - Chat */}
@@ -284,7 +301,7 @@ export default function Home() {
             onClick={() => {
               const newSessionId = `session-${new Date().toISOString()}`;
               setActiveSessionId(newSessionId);
-              setMessages([]); // Clear chat for new session
+              setMessages([]);
             }}
             className="text-xs bg-gray-900 text-white px-2 py-1 rounded hover:bg-gray-800 transition-colors"
           >
@@ -296,7 +313,7 @@ export default function Home() {
           {sessions.length === 0 ? (
             <p className="text-gray-400 italic text-center py-8">No historical sessions found.</p>
           ) : (
-            sessions.map((session, idx) => (
+            sessions.map((session: any) => (
               <div 
                 key={session.session_id} 
                 className={`bg-white border rounded-lg shadow-sm overflow-hidden transition-all ${activeSessionId === session.session_id ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-gray-200 hover:border-gray-300 cursor-pointer'}`}

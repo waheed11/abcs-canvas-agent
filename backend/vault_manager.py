@@ -42,6 +42,8 @@ class VaultManager:
             return node
             
         try:
+            dirs = []
+            files = []
             for item in sorted(dir_path.iterdir()):
                 if item.name.startswith('.'):
                     continue
@@ -53,14 +55,15 @@ class VaultManager:
                         current_depth=current_depth + 1, 
                         max_depth=max_depth
                     )
-                    node["children"].append(child_node)
+                    dirs.append(child_node)
                 elif item.is_file() and item.suffix == '.md':
-                    # Include markdown files as leaf nodes
-                    node["children"].append({
-                        "name": item.stem,  # filename without extension
+                    files.append({
+                        "name": item.stem,
                         "path": f"{relative_path}/{item.name}",
                         "type": "file"
                     })
+            # Folders first, then files
+            node["children"] = dirs + files
         except Exception as e:
             print(f"Error reading {dir_path}: {e}")
             

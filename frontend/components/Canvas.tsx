@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useImperativeHandle, forwardRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -11,7 +11,9 @@ import {
   Node,
   Edge,
   addEdge,
-  Connection
+  Connection,
+  useReactFlow,
+  ReactFlowProvider
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -23,12 +25,14 @@ const getColorForType = (type: string) => {
     case 'C': return '#F87171'; // Red
     case 'D': return '#34D399'; // Green
     case 'E': return '#9CA3AF'; // Gray
+    case 'draft': return '#FB923C'; // Orange for drafts
     default: return '#E5E7EB';
   }
 };
 
 const createNodeStyle = (type: string) => {
-  const size = type === 'B' ? 100 : 60;
+  const isDraft = type === 'draft';
+  const size = type === 'B' ? 100 : (isDraft ? 70 : 60);
   return {
     borderRadius: '50%', 
     width: size,
@@ -36,23 +40,49 @@ const createNodeStyle = (type: string) => {
     display: 'flex', 
     alignItems: 'center', 
     justifyContent: 'center',
-    background: getColorForType(type),
-    color: 'white',
+    background: isDraft ? 'white' : getColorForType(type),
+    color: isDraft ? '#FB923C' : 'white',
     fontWeight: 'bold',
-    boxShadow: `0 4px 14px -2px ${getColorForType(type)}66`,
-    fontSize: type === 'B' ? '14px' : '10px',
+    boxShadow: isDraft 
+      ? '0 4px 14px -2px rgba(251, 146, 60, 0.4)' 
+      : `0 4px 14px -2px ${getColorForType(type)}66`,
+    fontSize: type === 'B' ? '14px' : (isDraft ? '11px' : '10px'),
     textAlign: 'center' as const,
     padding: '4px',
-    border: `3px solid ${getColorForType(type)}33`,
+    border: isDraft ? '3px dashed #FB923C' : `3px solid ${getColorForType(type)}33`,
     overflow: 'hidden' as const,
     wordBreak: 'break-all' as const,
     lineHeight: '1.1',
+    cursor: isDraft ? 'grab' : 'default',
   };
 };
 
-export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, activeSessionId: string }) {
+interface CanvasProps {
+  ws: WebSocket | null;
+  activeSessionId: string;
+  onDraftDragStart?: (e: any, draftId: string) => void;
+}
+
+const CanvasInner = forwardRef(function CanvasInner(
+  { ws, activeSessionId, onDraftDragStart }: CanvasProps,
+  ref: React.Ref<{ addDraftCircle: (id: string) => void }>
+) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+
+  // Expose addDraftCircle to parent
+  useImperativeHandle(ref, () => ({
+    addDraftCircle: (id: string) => {
+      const newNode: Node = {
+        id: id,
+        position: { x: 350, y: 300 }, // Center of canvas
+        data: { label: 'New' },
+        style: createNodeStyle('draft'),
+        draggable: true,
+      };
+      setNodes(prev => [...prev, newNode]);
+    }
+  }));
 
   // Listen for WebSocket commands to draw nodes
   useEffect(() => {
@@ -62,14 +92,14 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'canvas_update' && data.action === 'add_nodes') {
-          // Central Source Node (B) — placed at center of canvas
+          // Central Source Node (B)
           const targetNodeId = `B-${Date.now()}`;
           const centerX = 400;
           const centerY = 350;
           
           const newBNode: Node = {
             id: targetNodeId,
-            position: { x: centerX - 50, y: centerY - 50 }, // offset by half size so center aligns
+            position: { x: centerX - 50, y: centerY - 50 },
             data: { label: 'Source' },
             style: createNodeStyle('B')
           };
@@ -81,7 +111,7 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
           const atomicsList: {id: string, label: string}[] = [];
           let categoryIndex = 0;
           for (const [category, count] of Object.entries(data.atomics || {})) {
-            const visualCount = Math.min(count as number, 5); // Max 5 per category for UI
+            const visualCount = Math.min(count as number, 5);
             for (let j = 0; j < visualCount; j++) {
                atomicsList.push({
                  id: `A-${Date.now()}-${categoryIndex}-${j}`,
@@ -91,30 +121,25 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
             categoryIndex++;
           }
 
-          // ====== FULL 360° MULTI-RING LAYOUT ======
+          // Full 360° multi-ring layout
           const totalAtomics = atomicsList.length;
-          const maxPerRing = 12; // max nodes in one ring before we start a new ring
-          const ringGap = 120;  // spacing between concentric rings
+          const maxPerRing = 12;
+          const ringGap = 120;
           const baseRadius = 180;
 
           let placed = 0;
           let ringIndex = 0;
 
           while (placed < totalAtomics) {
-            const ringCapacity = Math.min(maxPerRing + ringIndex * 4, totalAtomics - placed);
-            const nodesInThisRing = Math.min(ringCapacity, totalAtomics - placed);
+            const nodesInThisRing = Math.min(maxPerRing + ringIndex * 4, totalAtomics - placed);
             const radius = baseRadius + ringIndex * ringGap;
-
-            // Start angle offset so rings don't line up perfectly
             const ringOffset = ringIndex * 0.3;
 
             for (let i = 0; i < nodesInThisRing; i++) {
               const atomic = atomicsList[placed + i];
-              
-              // Full 360° distribution: angle from 0 to 2π
               const angle = ringOffset + (i / nodesInThisRing) * Math.PI * 2;
               
-              const x = centerX + radius * Math.cos(angle) - 30; // offset by half node size (60/2)
+              const x = centerX + radius * Math.cos(angle) - 30;
               const y = centerY + radius * Math.sin(angle) - 30;
               
               newNodes.push({
@@ -137,8 +162,9 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
             ringIndex++;
           }
 
-          setNodes((nds) => [...nds, ...newNodes]);
-          setEdges((eds) => [...eds, ...newEdges]);
+          // Remove any draft nodes from canvas (they've been consumed)
+          setNodes(nds => [...nds.filter(n => !n.id.startsWith('draft-')), ...newNodes]);
+          setEdges(eds => [...eds, ...newEdges]);
         }
       } catch (e) {
         console.error("Canvas msg parse error", e);
@@ -165,21 +191,32 @@ export default function Canvas({ ws, activeSessionId }: { ws: WebSocket | null, 
   );
 
   return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onConnect={onConnect}
+      fitView
+      fitViewOptions={{ padding: 0.3 }}
+      minZoom={0.2}
+      maxZoom={2}
+    >
+      <Background gap={24} color="#e5e7eb" />
+      <Controls />
+    </ReactFlow>
+  );
+});
+
+// Wrapper to provide ReactFlowProvider
+const Canvas = forwardRef(function Canvas(props: CanvasProps, ref: React.Ref<{ addDraftCircle: (id: string) => void }>) {
+  return (
     <div style={{ width: '100%', height: '100%', backgroundColor: '#f9fafb' }}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        fitView
-        fitViewOptions={{ padding: 0.3 }}
-        minZoom={0.2}
-        maxZoom={2}
-      >
-        <Background gap={24} color="#e5e7eb" />
-        <Controls />
-      </ReactFlow>
+      <ReactFlowProvider>
+        <CanvasInner {...props} ref={ref} />
+      </ReactFlowProvider>
     </div>
   );
-}
+});
+
+export default Canvas;
